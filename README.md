@@ -1,3 +1,3 @@
 #Verify GitHubAction project
 
-verify that only owner can merge PRs into main branch
+verify all flow: feature branch -> PR into develop -> review -> merge -> PR into main -> merge -> bump version create release and merge back into develop
