@@ -12,9 +12,55 @@ jobs:
       pull-requests: write
       contents: write
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
+          ref: develop
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Determine version
+        id: version
+        run: |
+          main_version=$(node -e "
+            const { execSync } = require('child_process');
+            try {
+              const pkg = JSON.parse(execSync('git show origin/main:package.json').toString());
+              console.log(pkg.version);
+            } catch (e) {
+              console.log('0.0.0');
+            }
+          ")
+          develop_version=$(node -p "require('./package.json').version")
+
+          IFS='.' read -r mj mn mp <<< "$main_version"
+          expected_next="$mj.$mn.$((mp + 1))"
+
+          if [ "$develop_version" = "$main_version" ] || [ "$develop_version" != "$expected_next" ]; then
+            # Fresh start or manual major/minor bump: do one patch bump
+            new_version=$(npm version patch --no-git-tag-version | sed 's/^v//')
+            echo "should_commit=true" >> $GITHUB_OUTPUT
+          else
+            # Already at the correct next version: include new code without re-bumping
+            new_version=$develop_version
+            echo "should_commit=false" >> $GITHUB_OUTPUT
+          fi
+          echo "version=$new_version" >> $GITHUB_OUTPUT
+
+      - name: Commit and push version bump
+        if: steps.version.outputs.should_commit == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip actions]"
+          git push
 
       - name: Check if PR already exists
         id: check-pr
@@ -27,22 +73,7 @@ jobs:
             echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Read version
-        id: version
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> $GITHUB_OUTPUT
-          IFS='.' read -r major minor patch <<< "$version"
-          echo "next_version=$major.$minor.$((patch + 1))" >> $GITHUB_OUTPUT
-
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Create Pull Request
         if: steps.check-pr.outputs.pr_exists == 'false'
@@ -50,8 +81,8 @@ jobs:
           gh pr create \
             --base main \
             --head develop \
-            --title "chore: release ${{ steps.version.outputs.next_version }}" \
-            --body "Automated release PR. Merge to `main` and tag a new version." \
+            --title "chore: release ${{ steps.version.outputs.version }}" \
+            --body "Automated release PR. Merge to \`main\` to create a new release." \
             --label release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -60,7 +91,7 @@ jobs:
         if: steps.check-pr.outputs.pr_exists == 'true'
         run: |
           gh pr edit ${{ steps.check-pr.outputs.pr_number }} \
-            --title "chore: release ${{ steps.version.outputs.next_version }}" \
-            --body "Automated release PR. Merge to `main` and tag a new version."
+            --title "chore: release ${{ steps.version.outputs.version }}" \
+            --body "Automated release PR. Merge to \`main\` to create a new release."
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
