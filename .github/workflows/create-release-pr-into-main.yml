@@ -31,30 +31,40 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          main_version=$(node -e "
-            const { execSync } = require('child_process');
-            try {
-              const pkg = JSON.parse(execSync('git show origin/main:package.json').toString());
-              console.log(pkg.version);
-            } catch (e) {
-              console.log('0.0.0');
-            }
+          # Version in develop before this PR was merged
+          before_version=$(git show ${{ github.event.pull_request.base.sha }}:package.json | node -e "
+            let d = '';
+            process.stdin.on('data', c => d += c);
+            process.stdin.on('end', () => console.log(JSON.parse(d).version));
           ")
-          develop_version=$(node -p "require('./package.json').version")
 
-          IFS='.' read -r mj mn mp <<< "$main_version"
-          expected_next="$mj.$mn.$((mp + 1))"
+          # Version in develop now (after merge)
+          current_version=$(node -p "require('./package.json').version")
 
-          if [ "$develop_version" = "$main_version" ] || [ "$develop_version" != "$expected_next" ]; then
-            # Fresh start or manual major/minor bump: do one patch bump
+          # Check if a release PR to main already exists
+          pr_number=$(gh pr list --base main --head develop --json number -q '.[0].number')
+          echo "pr_number=${pr_number}" >> $GITHUB_OUTPUT
+
+          if [ -z "$pr_number" ]; then
+            # No release PR: always bump and create one
             new_version=$(npm version patch --no-git-tag-version | sed 's/^v//')
             echo "should_commit=true" >> $GITHUB_OUTPUT
+            echo "pr_exists=false" >> $GITHUB_OUTPUT
+          elif [ "$before_version" != "$current_version" ]; then
+            # Release PR exists but user manually changed the version: bump from new version
+            new_version=$(npm version patch --no-git-tag-version | sed 's/^v//')
+            echo "should_commit=true" >> $GITHUB_OUTPUT
+            echo "pr_exists=true" >> $GITHUB_OUTPUT
           else
-            # Already at the correct next version: include new code without re-bumping
-            new_version=$develop_version
+            # Release PR exists, version untouched: include code in current release as-is
+            new_version=$current_version
             echo "should_commit=false" >> $GITHUB_OUTPUT
+            echo "pr_exists=true" >> $GITHUB_OUTPUT
           fi
+
           echo "version=$new_version" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Commit and push version bump
         if: steps.version.outputs.should_commit == 'true'
@@ -65,21 +75,8 @@ jobs:
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
           git push
 
-      - name: Check if PR already exists
-        id: check-pr
-        run: |
-          pr_number=$(gh pr list --base main --head develop --json number -q '.[0].number')
-          if [ -z "$pr_number" ]; then
-            echo "pr_exists=false" >> $GITHUB_OUTPUT
-          else
-            echo "pr_exists=true" >> $GITHUB_OUTPUT
-            echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-
       - name: Create Pull Request
-        if: steps.check-pr.outputs.pr_exists == 'false'
+        if: steps.version.outputs.pr_exists == 'false'
         run: |
           gh pr create \
             --base main \
@@ -91,9 +88,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Update Pull Request
-        if: steps.check-pr.outputs.pr_exists == 'true'
+        if: steps.version.outputs.pr_exists == 'true' && steps.version.outputs.should_commit == 'true'
         run: |
-          gh pr edit ${{ steps.check-pr.outputs.pr_number }} \
+          gh pr edit ${{ steps.version.outputs.pr_number }} \
             --title "chore: release ${{ steps.version.outputs.version }}" \
             --body "Automated release PR. Merge to \`main\` to create a new release."
         env:
