@@ -1,0 +1,36 @@
+name: Retarget PR to develop
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+
+jobs:
+  retarget:
+    if: github.head_ref != 'develop'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Retarget PR to develop
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --base develop \
+            --repo ${{ github.repository }}
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "> [!NOTE]
+          > This PR has been automatically retargeted to \`develop\`.
+          > Please merge feature branches into \`develop\` first — only the automated release PR should target \`main\` directly." \
+            --repo ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
