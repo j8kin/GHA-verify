@@ -1,4 +1,4 @@
-name: Retarget PR to develop
+name: Retarget PR to WORKING_BRANCH
 
 on:
   pull_request:
