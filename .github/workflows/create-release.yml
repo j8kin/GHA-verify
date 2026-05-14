@@ -46,10 +46,12 @@ jobs:
         run: |
           previous_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 
+          filter='Merge pull request|chore: bump version'
+
           if [ -z "$previous_tag" ]; then
-            notes=$(git log --pretty=format:"- %h: %s" | head -20)
+            notes=$(git log --pretty=format:"- %h: %s" | grep -vE "$filter" | head -20)
           else
-            notes=$(git log ${previous_tag}..HEAD --pretty=format:"- %h: %s")
+            notes=$(git log ${previous_tag}..HEAD --pretty=format:"- %h: %s" | grep -vE "$filter")
           fi
 
           echo "notes<<EOF" >> $GITHUB_OUTPUT
