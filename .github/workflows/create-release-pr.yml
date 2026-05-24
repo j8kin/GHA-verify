@@ -13,7 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
-      contents: write
     steps:
       - name: Generate app token
         id: app-token
@@ -36,70 +35,48 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Determine version
-        id: version
+      - name: Compute version options from latest tag
+        id: versions
         run: |
-          # Version in develop before this PR was merged
-          before_version=$(git show ${{ github.event.pull_request.base.sha }}:package.json | node -e "
-            let d = '';
-            process.stdin.on('data', c => d += c);
-            process.stdin.on('end', () => console.log(JSON.parse(d).version));
-          ")
+          latest_tag=$(git tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')
+          current=${latest_tag:-0.0.0}
+          IFS='.' read -r major minor patch <<< "$current"
+          echo "patch=$major.$minor.$((patch + 1))" >> $GITHUB_OUTPUT
+          echo "minor=$major.$((minor + 1)).0" >> $GITHUB_OUTPUT
+          echo "major=$((major + 1)).0.0" >> $GITHUB_OUTPUT
 
-          # Version in develop now (after merge)
-          current_version=$(node -p "require('./package.json').version")
-
-          # Check if a release PR already exists
-          pr_number=$(gh pr list --base ${{ steps.branches.outputs.release-branch }} --head ${{ steps.branches.outputs.working-branch }} --json number -q '.[0].number')
-          echo "pr_number=${pr_number}" >> $GITHUB_OUTPUT
-
-          if [ -z "$pr_number" ]; then
-            # No release PR: always bump and create one
-            new_version=$(npm version patch --no-git-tag-version | sed 's/^v//')
-            echo "should_commit=true" >> $GITHUB_OUTPUT
-            echo "pr_exists=false" >> $GITHUB_OUTPUT
-          elif [ "$before_version" != "$current_version" ]; then
-            # Release PR exists but user manually changed the version: bump from new version
-            new_version=$(npm version patch --no-git-tag-version | sed 's/^v//')
-            echo "should_commit=true" >> $GITHUB_OUTPUT
-            echo "pr_exists=true" >> $GITHUB_OUTPUT
-          else
-            # Release PR exists, version untouched: include code in current release as-is
-            new_version=$current_version
-            echo "should_commit=false" >> $GITHUB_OUTPUT
-            echo "pr_exists=true" >> $GITHUB_OUTPUT
-          fi
-
-          echo "version=$new_version" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Commit and push version bump
-        if: steps.version.outputs.should_commit == 'true'
+      - name: Check for existing release PR
+        id: check-pr
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add package.json
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-          git push
-
-      - name: Create Pull Request
-        if: steps.version.outputs.pr_exists == 'false'
-        run: |
-          gh pr create \
+          pr_number=$(gh pr list \
             --base ${{ steps.branches.outputs.release-branch }} \
             --head ${{ steps.branches.outputs.working-branch }} \
-            --title "chore: release ${{ steps.version.outputs.version }}" \
-            --body "Automated release PR. Merge to \`${{ steps.branches.outputs.release-branch }}\` to create a new release." \
-            --label release
+            --json number -q '.[0].number')
+          echo "pr_exists=${pr_number:+true}" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
-      - name: Update Pull Request
-        if: steps.version.outputs.pr_exists == 'true' && steps.version.outputs.should_commit == 'true'
-        run: |
-          gh pr edit ${{ steps.version.outputs.pr_number }} \
-            --title "chore: release ${{ steps.version.outputs.version }}" \
-            --body "Automated release PR. Merge to \`${{ steps.branches.outputs.release-branch }}\` to create a new release."
+      - name: Create Release PR
+        if: steps.check-pr.outputs.pr_exists != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_BRANCH: ${{ steps.branches.outputs.release-branch }}
+          WORKING_BRANCH: ${{ steps.branches.outputs.working-branch }}
+          V_PATCH: ${{ steps.versions.outputs.patch }}
+          V_MINOR: ${{ steps.versions.outputs.minor }}
+          V_MAJOR: ${{ steps.versions.outputs.major }}
+        run: |
+          printf '%s\n\n%s\n%s\n%s\n%s\n%s\n' \
+            "Automated release PR. Merge to \`${RELEASE_BRANCH}\` to create a new release." \
+            "<!-- radiobutton-group:version -->" \
+            "- [x] ${V_PATCH} (patch — default)" \
+            "- [ ] ${V_MINOR} (minor)" \
+            "- [ ] ${V_MAJOR} (major)" \
+            "<!-- /radiobutton-group -->" > /tmp/pr-body.md
+
+          gh pr create \
+            --base "${RELEASE_BRANCH}" \
+            --head "${WORKING_BRANCH}" \
+            --title "chore: release" \
+            --body-file /tmp/pr-body.md \
+            --label release
