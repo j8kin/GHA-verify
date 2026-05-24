@@ -66,17 +66,17 @@ jobs:
           V_MINOR: ${{ steps.versions.outputs.minor }}
           V_MAJOR: ${{ steps.versions.outputs.major }}
         run: |
-          body="Automated release PR. Merge to \`${RELEASE_BRANCH}\` to create a new release.
-
-<!-- radiobutton-group:version -->
-- [x] ${V_PATCH} (patch — default)
-- [ ] ${V_MINOR} (minor)
-- [ ] ${V_MAJOR} (major)
-<!-- /radiobutton-group -->"
+          printf '%s\n\n%s\n%s\n%s\n%s\n%s\n' \
+            "Automated release PR. Merge to \`${RELEASE_BRANCH}\` to create a new release." \
+            "<!-- radiobutton-group:version -->" \
+            "- [x] ${V_PATCH} (patch — default)" \
+            "- [ ] ${V_MINOR} (minor)" \
+            "- [ ] ${V_MAJOR} (major)" \
+            "<!-- /radiobutton-group -->" > /tmp/pr-body.md
 
           gh pr create \
             --base "${RELEASE_BRANCH}" \
             --head "${WORKING_BRANCH}" \
             --title "chore: release" \
-            --body "$body" \
+            --body-file /tmp/pr-body.md \
             --label release
