@@ -35,10 +35,20 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Read version
+      - name: Determine version from PR selection
         id: version
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          version=$(node -p "require('./package.json').version")
+          version=$(echo "$PR_BODY" | grep -oP '(?<=- \[x\] )\d+\.\d+\.\d+' | head -1)
+
+          if [ -z "$version" ]; then
+            latest_tag=$(git tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')
+            current=${latest_tag:-0.0.0}
+            IFS='.' read -r major minor patch <<< "$current"
+            version="$major.$minor.$((patch + 1))"
+          fi
+
           echo "version=$version" >> $GITHUB_OUTPUT
 
       - name: Generate release notes
