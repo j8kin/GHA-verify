@@ -35,11 +35,14 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Get version
+        id: get-version
+        uses: ./.github/actions/repository/get-version
+
       - name: Compute version options from latest tag
         id: versions
         run: |
-          latest_tag=$(git tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')
-          current=${latest_tag:-0.0.0}
+          current="${{ steps.get-version.outputs.release-version }}"
           IFS='.' read -r major minor patch <<< "$current"
           echo "patch=$major.$minor.$((patch + 1))" >> $GITHUB_OUTPUT
           echo "minor=$major.$((minor + 1)).0" >> $GITHUB_OUTPUT
